@@ -21,6 +21,28 @@ private enum CaptureMode: String {
     }
 }
 
+private enum MicDenoise: String {
+    case off
+    case light
+    case strong
+
+    var title: String {
+        switch self {
+        case .off: return "Выключено"
+        case .light: return "Слабое"
+        case .strong: return "Сильное"
+        }
+    }
+
+    var mix: Float {
+        switch self {
+        case .off: return 0
+        case .light: return 0.65
+        case .strong: return 1
+        }
+    }
+}
+
 private enum RecorderError: LocalizedError {
     case noDisplay
     case permission(String)
@@ -50,18 +72,25 @@ enum AppMain {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let recorder = Recorder()
     private var mode: CaptureMode = .both
+    private var denoise: MicDenoise = .light
     private var window: NSWindow!
     private var statusLabel: NSTextField!
     private var modePopup: NSPopUpButton!
+    private var denoisePopup: NSPopUpButton!
     private var recordButton: NSButton!
     private var startItem: NSMenuItem!
     private var modeMenuItems: [CaptureMode: NSMenuItem] = [:]
+    private var denoiseMenuItems: [MicDenoise: NSMenuItem] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         if let saved = UserDefaults.standard.string(forKey: "mode"),
            let parsed = CaptureMode(rawValue: saved) {
             mode = parsed
+        }
+        if let saved = UserDefaults.standard.string(forKey: "micDenoise"),
+           let parsed = MicDenoise(rawValue: saved) {
+            denoise = parsed
         }
         buildMenus()
         buildWindow()
@@ -118,6 +147,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsMenu.addItem(entry)
             modeMenuItems[item] = entry
         }
+        settingsMenu.addItem(.separator())
+        for item in [MicDenoise.off, .light, .strong] {
+            let entry = NSMenuItem(title: "Шум микрофона: \(item.title.lowercased())", action: #selector(selectDenoise(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = item.rawValue
+            settingsMenu.addItem(entry)
+            denoiseMenuItems[item] = entry
+        }
         main.addItem(settingsItem)
 
         NSApp.mainMenu = main
@@ -125,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 230),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 274),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -157,6 +194,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             modePopup.lastItem?.representedObject = item.rawValue
         }
 
+        let denoiseLabel = NSTextField(labelWithString: "Шум микрофона")
+        denoiseLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        denoisePopup = NSPopUpButton()
+        denoisePopup.translatesAutoresizingMaskIntoConstraints = false
+        denoisePopup.target = self
+        denoisePopup.action = #selector(selectDenoiseFromPopup(_:))
+        for item in [MicDenoise.off, .light, .strong] {
+            denoisePopup.addItem(withTitle: item.title)
+            denoisePopup.lastItem?.representedObject = item.rawValue
+        }
+
         recordButton = NSButton(title: "Начать запись", target: self, action: #selector(toggleRecording))
         recordButton.bezelStyle = .rounded
         recordButton.controlSize = .large
@@ -171,6 +220,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         content.addSubview(hint)
         content.addSubview(modeLabel)
         content.addSubview(modePopup)
+        content.addSubview(denoiseLabel)
+        content.addSubview(denoisePopup)
         content.addSubview(recordButton)
         content.addSubview(folderButton)
 
@@ -185,11 +236,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             modeLabel.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 20),
             modeLabel.leadingAnchor.constraint(equalTo: statusLabel.leadingAnchor),
+            modeLabel.widthAnchor.constraint(equalToConstant: 128),
 
             modePopup.centerYAnchor.constraint(equalTo: modeLabel.centerYAnchor),
             modePopup.leadingAnchor.constraint(equalTo: modeLabel.trailingAnchor, constant: 12),
 
-            recordButton.topAnchor.constraint(equalTo: modeLabel.bottomAnchor, constant: 24),
+            denoiseLabel.topAnchor.constraint(equalTo: modeLabel.bottomAnchor, constant: 16),
+            denoiseLabel.leadingAnchor.constraint(equalTo: modeLabel.leadingAnchor),
+            denoiseLabel.widthAnchor.constraint(equalTo: modeLabel.widthAnchor),
+
+            denoisePopup.centerYAnchor.constraint(equalTo: denoiseLabel.centerYAnchor),
+            denoisePopup.leadingAnchor.constraint(equalTo: modePopup.leadingAnchor),
+
+            recordButton.topAnchor.constraint(equalTo: denoiseLabel.bottomAnchor, constant: 24),
             recordButton.leadingAnchor.constraint(equalTo: statusLabel.leadingAnchor),
             recordButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
 
@@ -210,13 +269,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordButton.title = recording ? "Остановить и сохранить" : "Начать запись"
         startItem.title = recordButton.title
         modePopup.isEnabled = !recording
+        denoisePopup.isEnabled = !recording
         window.title = recording ? "Идёт запись" : "Запись встречи"
         for (item, menuItem) in modeMenuItems {
             menuItem.state = item == mode ? .on : .off
             menuItem.isEnabled = !recording
         }
+        for (item, menuItem) in denoiseMenuItems {
+            menuItem.state = item == denoise ? .on : .off
+            menuItem.isEnabled = !recording
+        }
         if let index = modePopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == mode.rawValue }) {
             modePopup.selectItem(at: index)
+        }
+        if let index = denoisePopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == denoise.rawValue }) {
+            denoisePopup.selectItem(at: index)
         }
     }
 
@@ -242,7 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusLabel.stringValue = "Запускаю…"
-        recorder.start(mode: mode) { [weak self] error in
+        recorder.start(mode: mode, denoise: denoise) { [weak self] error in
             DispatchQueue.main.async {
                 self?.recordButton.isEnabled = true
                 self?.startItem.isEnabled = true
@@ -271,12 +338,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshUI()
     }
 
+    @objc private func selectDenoise(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let next = MicDenoise(rawValue: raw) else { return }
+        applyDenoise(next)
+    }
+
+    @objc private func selectDenoiseFromPopup(_ sender: NSPopUpButton) {
+        guard let raw = sender.selectedItem?.representedObject as? String,
+              let next = MicDenoise(rawValue: raw) else { return }
+        applyDenoise(next)
+    }
+
+    private func applyDenoise(_ next: MicDenoise) {
+        denoise = next
+        UserDefaults.standard.set(next.rawValue, forKey: "micDenoise")
+        refreshUI()
+    }
+
     @objc private func openFolder() {
         NSWorkspace.shared.open(Recorder.folder)
     }
 
     @objc private func showAbout() {
-        alert("Пишет микрофон и звук компьютера в один файл WAV, без видео. Файлы лежат в папке Recordings/MeetRec в домашней папке.")
+        alert("Пишет микрофон и звук компьютера в один файл WAV, без видео. Шум микрофона можно ослабить, звук встречи при этом не меняется. Файлы лежат в папке Recordings/MeetRec в домашней папке.")
     }
 
     @objc private func quit() {
@@ -291,6 +375,109 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+private final class MicDenoiser {
+    private let state: OpaquePointer
+    private let mix: Float
+    private let format: AVAudioFormat
+    private let frameCount: Int
+    private var pending: [Float] = []
+    private var skipFirst = true
+
+    init?(mix: Float, format: AVAudioFormat) {
+        guard mix > 0, let state = MeetRecRNNoiseCreate() else { return nil }
+        let frameCount = Int(MeetRecRNNoiseFrameSize())
+        guard frameCount > 0 else {
+            MeetRecRNNoiseDestroy(state)
+            return nil
+        }
+        self.state = state
+        self.mix = mix
+        self.format = format
+        self.frameCount = frameCount
+    }
+
+    deinit {
+        MeetRecRNNoiseDestroy(state)
+    }
+
+    func process(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        append(buffer)
+        return drain()
+    }
+
+    func flush() -> AVAudioPCMBuffer? {
+        let remainder = pending.count % frameCount
+        if remainder != 0 {
+            pending.append(contentsOf: repeatElement(0, count: frameCount - remainder))
+        }
+        return drain()
+    }
+
+    private func append(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData else { return }
+        let frames = Int(buffer.frameLength)
+        let count = Int(buffer.format.channelCount)
+        guard frames > 0, count > 0 else { return }
+        pending.reserveCapacity(pending.count + frames)
+        for frame in 0..<frames {
+            var sum: Float = 0
+            for channel in 0..<count {
+                sum += channels[channel][frame]
+            }
+            pending.append(sum / Float(count))
+        }
+    }
+
+    private func drain() -> AVAudioPCMBuffer? {
+        var rendered: [Float] = []
+        var read = 0
+        while pending.count - read >= frameCount {
+            let dry = Array(pending[read..<(read + frameCount)])
+            read += frameCount
+            let cleaned = denoise(dry)
+            if skipFirst {
+                skipFirst = false
+                continue
+            }
+            rendered.append(contentsOf: cleaned)
+        }
+        if read > 0 {
+            pending.removeFirst(read)
+        }
+        return stereoBuffer(rendered)
+    }
+
+    private func denoise(_ dry: [Float]) -> [Float] {
+        var input = dry.map { $0 * 32_768 }
+        var output = [Float](repeating: 0, count: frameCount)
+        input.withUnsafeMutableBufferPointer { inBuffer in
+            output.withUnsafeMutableBufferPointer { outBuffer in
+                guard let inPointer = inBuffer.baseAddress, let outPointer = outBuffer.baseAddress else { return }
+                _ = MeetRecRNNoiseProcess(state, outPointer, inPointer)
+            }
+        }
+        let keep = 1 - mix
+        return zip(dry, output).map { sample, cleaned in
+            let wet = min(1, max(-1, cleaned / 32_768))
+            return sample * keep + wet * mix
+        }
+    }
+
+    private func stereoBuffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
+        guard !samples.isEmpty,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
+              let channels = buffer.floatChannelData else { return nil }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        for index in samples.indices {
+            channels[0][index] = samples[index]
+            if format.channelCount > 1 {
+                channels[1][index] = samples[index]
+            }
+        }
+        return buffer
+    }
+}
+
 private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     static var folder: URL {
         let url = FileManager.default.homeDirectoryForCurrentUser
@@ -302,9 +489,11 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private(set) var isRecording = false
     private let lock = NSLock()
     private var mode: CaptureMode = .both
+    private var denoise: MicDenoise = .light
     private var stream: SCStream?
     private var engine: AVAudioEngine?
     private var micConverter: AVAudioConverter?
+    private var micDenoiser: MicDenoiser?
     private var micFile: AVAudioFile?
     private var systemFile: AVAudioFile?
     private var sessionFolder: URL?
@@ -317,7 +506,7 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         interleaved: false
     )!
 
-    func start(mode: CaptureMode, completion: @escaping (Error?) -> Void) {
+    func start(mode: CaptureMode, denoise: MicDenoise, completion: @escaping (Error?) -> Void) {
         lock.lock()
         if isRecording {
             lock.unlock()
@@ -325,6 +514,7 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             return
         }
         self.mode = mode
+        self.denoise = denoise
         startedAt = Date()
         let folder = Self.folder.appendingPathComponent(fileStamp(startedAt), isDirectory: true)
         sessionFolder = folder
@@ -334,7 +524,7 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             do {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 if mode != .system {
-                    try startMicrophone(in: folder)
+                    try startMicrophone(in: folder, denoise: denoise)
                 }
                 if mode != .microphone {
                     try await startSystemAudio(in: folder)
@@ -373,7 +563,7 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    private func startMicrophone(in folder: URL) throws {
+    private func startMicrophone(in folder: URL, denoise: MicDenoise) throws {
         let session = AVCaptureDevice.authorizationStatus(for: .audio)
         if session == .notDetermined {
             let semaphore = DispatchSemaphore(value: 0)
@@ -394,6 +584,7 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             throw RecorderError.permission("Не получилось подготовить микрофон к записи.")
         }
         let file = try AVAudioFile(forWriting: folder.appendingPathComponent("mic.caf"), settings: targetFormat.settings)
+        let denoiser = denoise == .off ? nil : MicDenoiser(mix: denoise.mix, format: targetFormat)
         input.installTap(onBus: 0, bufferSize: 4096, format: hardware) { [weak self] buffer, _ in
             self?.writeMicrophone(buffer)
         }
@@ -402,6 +593,7 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         self.engine = engine
         self.micConverter = converter
+        self.micDenoiser = denoiser
         self.micFile = file
         lock.unlock()
     }
@@ -409,13 +601,14 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private func writeMicrophone(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         let converter = micConverter
-        let file = micFile
+        let denoiser = micDenoiser
         lock.unlock()
-        guard let converter, let file, let converted = convert(buffer, with: converter) else { return }
+        guard let converter, let converted = convert(buffer, with: converter) else { return }
+        let output = denoiser?.process(converted) ?? (denoiser == nil ? converted : nil)
+        guard let output else { return }
         lock.lock()
         defer { lock.unlock() }
-        try? micFile?.write(from: converted)
-        _ = file
+        try? micFile?.write(from: output)
     }
 
     private func startSystemAudio(in folder: URL) async throws {
@@ -506,11 +699,19 @@ private final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         lock.lock()
         let engine = self.engine
         self.engine = nil
-        micConverter = nil
-        micFile = nil
         lock.unlock()
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
+        lock.lock()
+        micConverter = nil
+        let file = micFile
+        let denoiser = micDenoiser
+        micFile = nil
+        micDenoiser = nil
+        lock.unlock()
+        if let denoiser, let file, let tail = denoiser.flush() {
+            try? file.write(from: tail)
+        }
     }
 
     private func teardown() {
